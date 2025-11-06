@@ -1,7 +1,23 @@
 package src.passwordManager.model;
+
 public class User {
     private String username;
     private String masterPasswordHash;
-    // vault
-    
+    private String salt;
+    private String iterations;
+    Vault vault;
+
+    public boolean validateMasterPassword(String attempt) {
+        return true;
+        /*
+         * compara derivación/hash; devuelve boolean. Si hash inválido, lanza
+         * InvalidMasterPasswordException o devuelve false.
+         */
+    }
+    public void setVault(Vault v){
+        this.vault = v;
+    }
+    public Vault geVault(){
+        return vault;
+    }
 }

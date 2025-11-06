@@ -8,7 +8,7 @@ enum EntryType {
 }
 
 public abstract class Entry {
-    private String id, tittle;
+    private String id, title;
     private static int contador;
     private EntryType type;
 
@@ -21,7 +21,7 @@ public abstract class Entry {
 
     protected void setTittle(String tittle){
         if (tittle != null && !tittle.isEmpty()) {
-            this.tittle = tittle;
+            this.title = tittle;
         } else{
             System.out.println("lanzar excepcion personalizada");
         }
@@ -29,11 +29,14 @@ public abstract class Entry {
     protected String getId(){
         return id;
     }
-    protected String getTittle(){
-        return tittle;
+    public String getTitle(){
+        return title;
     }
     protected EntryType getType(){
         return type;
     }
-
+    @Override
+    public String toString(){
+        return this.id + "," + this.title + "," + this.type;
+    }
 }
