@@ -56,7 +56,7 @@ public class Vault {
         if (matchingEntries.isEmpty()) {
             throw new PasswordManagerException("title not found:" + title);
         }
-        return matchingEntries; 
+        return matchingEntries;   
     }
 
     protected List<Entry> listEntries() {

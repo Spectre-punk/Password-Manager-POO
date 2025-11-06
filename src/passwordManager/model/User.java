@@ -14,6 +14,12 @@ public class User {
          * InvalidMasterPasswordException o devuelve false.
          */
     }
+    public void setMasterPassword(String newPassword){
+        /*
+         * derivar hash + salt, actualizar
+         * masterPasswordHash
+         */
+    }
     public void setVault(Vault v){
         this.vault = v;
     }
