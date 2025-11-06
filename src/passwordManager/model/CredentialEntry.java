@@ -2,6 +2,7 @@ package src.passwordManager.model;
 
 public class CredentialEntry extends Entry {
     private String site, username, notes;
+    private String salt;
     private byte[] encryptedSecret;
 
     protected CredentialEntry(String tittle, String site, String username, String plainPassword){
@@ -43,7 +44,7 @@ public class CredentialEntry extends Entry {
      * devuelve String con la contraseña en texto plano. (Si la implementación no
      * puede descifrar, que lance CryptoException).
      */
-    
+
     /*
      * setSecretFromPlain(String plainPassword, SecretKey masterKey) — cifra y
      * guarda en encryptedSecret

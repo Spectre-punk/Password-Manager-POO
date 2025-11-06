@@ -4,8 +4,8 @@ public class Password {
     private final int MIN_LENGTH = 8;
     private final int MAX_LENGTH = 16;
 
-    public Password(String password) {
-        setPassword(password);
+    public Password(String hashedPassword) {
+        setPassword(hashedPassword);
     }
     private void setPassword(String password) {
         if (password.length() >= MIN_LENGTH && password.length() <= MAX_LENGTH) {
