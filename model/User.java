@@ -9,7 +9,7 @@ public class User {
         return username;
     }
 
-    public void setUsername(String username) {
+    private void setUsername(String username) {
         if (username != null && !username.trim().isEmpty()) {
             this.username = username;
         } else {

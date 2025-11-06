@@ -6,10 +6,7 @@ public class Password {
     public Password(String password) {
         setPassword(password);
     }
-    public String getPassword() {
-        return password; 
-    }
-    public void setPassword(String password) {
+    private void setPassword(String password) {
         if (password.length() >= MIN_LENGTH && password.length() <= MAX_LENGTH) {
             this.password = password;
         } else {
