@@ -1,80 +1,80 @@
 package src.passwordManager.model;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.ArrayList;
-import java.util.Iterator; // Import Iterator
-import src.passwordManager.exceptions.PasswordManagerException;
+import java.util.Iterator;
+import java.util.Collections;
+import java.util.stream.Collectors;
+import src.passwordManager.exceptions.DuplicateEntryException;
+import src.passwordManager.exceptions.EntryNotFoundException;
 
 public class Vault {
-    String id;
-    User owner;
-    List<Entry> entries = new ArrayList<>();
+    private String id;
+    private User owner;
+    private final List<Entry> entries = new ArrayList<>();
 
-    protected Vault(User owner) {
+    public Vault(User owner) {
         this.owner = owner;
     }
 
-    protected boolean addEntry(Entry e) {
-        for (Entry list_entry : entries) {
-            if (e.getTitle().equals(list_entry.getTitle())) {
-                // lanzar excepcion
-                return false;
+    public boolean addEntry(Entry e) throws DuplicateEntryException {
+        for (Entry listEntry : entries) {
+            if (e.getTitle().equalsIgnoreCase(listEntry.getTitle())) {
+                throw new DuplicateEntryException("Duplicate entry title: " + e.getTitle());
             }
         }
-        entries.add(e);
-        return true;
+        return entries.add(e);
     }
 
-    protected void removeEntry(String entryID) throws PasswordManagerException {
-        Iterator<Entry> iterator = entries.iterator(); // Create an iterator
-        while (iterator.hasNext()) {
-            Entry list_entry = iterator.next();
-            if (entryID.equals(list_entry.getId())) { // Use equals for string comparison
-                // lanzar excepcion
-                iterator.remove(); // Safely remove the entry
-                return; // Exit after removing
-            }
-        }
-        // lanzar excepcion
-        throw new PasswordManagerException("Not found the id:" + entryID);
-    }  
-
-    protected void updateEntry(Entry e) {
-
-    }
-
-    protected List<Entry> findByTitle(String title) throws PasswordManagerException {
-        List<Entry> matchingEntries = new ArrayList<>();
+    public Entry removeEntry(String entryID) throws EntryNotFoundException {
         Iterator<Entry> iterator = entries.iterator();
-
         while (iterator.hasNext()) {
-            Entry list_entry = iterator.next();
-            if (title != null && title.equals(list_entry.getTitle())) { // Compare with title, not ID
-                matchingEntries.add(list_entry);
+            Entry listEntry = iterator.next();
+            if (entryID.equals(listEntry.getId())) {
+                iterator.remove();
+                return listEntry;
             }
         }
-        if (matchingEntries.isEmpty()) {
-            throw new PasswordManagerException("title not found:" + title);
+        throw new EntryNotFoundException("No se encontró la entrada con id: " + entryID);
+    }
+
+    public void updateEntry(Entry e) throws EntryNotFoundException {
+        for (int i = 0; i < entries.size(); i++) {
+            if (entries.get(i).getId().equals(e.getId())) {
+                entries.set(i, e);
+                return;
+            }
         }
-        return matchingEntries;   
+        throw new EntryNotFoundException("No se encontró la entrada con id: " + e.getId());
     }
 
-    protected List<Entry> listEntries() {
-        return entries;
+    public List<Entry> listEntries() {
+        return Collections.unmodifiableList(new ArrayList<>(entries));
     }
 
-    protected Entry getEntry(String id) throws PasswordManagerException {
+    public List<Entry> findByTitle(String title) {
+        String t = title == null ? "" : title.toLowerCase();
+        return entries.stream()
+                .filter(e -> e.getTitle() != null && e.getTitle().toLowerCase().contains(t))
+                .collect(Collectors.toList());
+    }
+
+    public List<CredentialEntry> findBySite(String site) {
+        String s = site == null ? "" : site.toLowerCase();
+        return entries.stream()
+                .filter(e -> e instanceof CredentialEntry)
+                .map(e -> (CredentialEntry) e)
+                .filter(c -> c.getSite() != null && c.getSite().toLowerCase().contains(s))
+                .collect(Collectors.toList());
+    }
+
+    public Entry getEntry(String id) throws EntryNotFoundException {
         for (Entry entry : entries) {
             if (id.equals(entry.getId())) {
                 return entry;
             }
         }
-        throw new PasswordManagerException("Id not found:" + id);
+        throw new EntryNotFoundException("No se encontró la entrada con id: " + id);
     }
-    /*
-     * exportToPlainStructure() — devuelve una estructura serializable (por ejemplo
-     * Map o un DTO) sin revelar secretos descifrados (solo meta). Útil para
-     * StorageManager.
-     * 
-     */
 }
