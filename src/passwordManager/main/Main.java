@@ -1,3 +1,4 @@
+package src.passwordManager.main;
 
 public class Main {
 

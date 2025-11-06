@@ -1,3 +1,4 @@
+package src.passwordManager.model;
 public class Password {
     private String password;
     private final int MIN_LENGTH = 8;
