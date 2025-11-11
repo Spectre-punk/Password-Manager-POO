@@ -4,7 +4,6 @@ import crypto.Hashing;
 
 public class UsuarioMaestro extends Usuario implements Hashing {
 
-    private boolean accesoTotal = true;
     private static UsuarioMaestro superUsuario;
     private final String salt;
     private String hashContraseñaMaestra;
