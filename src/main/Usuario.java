@@ -8,7 +8,4 @@ public abstract class Usuario {
     public String obtenerNombre() {
         return this.nombreDeUsuario;
     }
-
-    abstract void tieneAccessoTotal();
-
 }

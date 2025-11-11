@@ -13,5 +13,4 @@ public class CifradoUtil {
 
         return "";
     }
-    // metodo para generar hash
 }
