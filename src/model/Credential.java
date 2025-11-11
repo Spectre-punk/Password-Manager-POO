@@ -1,4 +1,4 @@
-package src.passwordManager.model;
+package model;
 
 public class Credential {
 
