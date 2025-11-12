@@ -20,7 +20,6 @@ public class UsuarioMaestro extends Usuario implements Hashing {
             superUsuario.tieneAccessoTotal();
         }
         return superUsuario;
-        // comentario
     }
 
     private boolean autenticar(String inputPassword) {

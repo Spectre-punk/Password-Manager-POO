@@ -1,15 +1,15 @@
 package model;
 
 import java.security.Key;
-import java.util.List;
 import java.util.ArrayList;
+import java.util.List;
 
 public class Gestor {
 
     private static Gestor gestor;
     // clase de tipo singleton una unica instancia dentro del programa
     private List<Credential> credenciales = new ArrayList<>(); // es donde se guardaron los todas las contraseñas y donde se haran la mayoria de las operaciones
-    PersistenciaDeDatos almacenador;
+    // PersistenciaDeDatos almacenador;
     Key claveMaestra;
 
     private Gestor() {

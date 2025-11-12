@@ -1,5 +1,7 @@
 package model;
 
+import crypto.CifradoUtil;
+
 public class Credential {
 
     private String servicio; // pagina relacionada a la contraseña (google, discord, apple)
@@ -8,16 +10,27 @@ public class Credential {
     private String notas;
 
     // constructores
-    public Credential() {
-
+    public Credential(String servicio, String nombreUsuario, String inputPassword, String notas) {
+        this.servicio = servicio;
+        this.nombreUsuario = nombreUsuario;
+        this.notas = notas;
+        this.contraseñaCifrada = CifradoUtil.cifrar(inputPassword);
     }
 
     public String getServicio() {
         return this.servicio;
     }
 
+    public void setServicio(String servicio) {
+        this.servicio = servicio;
+    }
+
     public String getNombreUsuario() {
         return this.nombreUsuario;
+    }
+
+    public void setNombreUsuario(String nombreUsuario) {
+        this.nombreUsuario = nombreUsuario;
     }
 
     public String getContraseñaCifrada() {
@@ -26,5 +39,17 @@ public class Credential {
 
     public String getNotas() {
         return notas;
+    }
+
+    public void setNotas(String notas) {
+        this.notas = notas;
+    }
+
+    @Override
+    public String toString() {
+        return "servicio:" + servicio
+                + "\nnombre de usuario:" + nombreUsuario
+                + "\nnotas:" + notas
+                + "\ncontraseña:" + CifradoUtil.descifrar(contraseñaCifrada);
     }
 }
