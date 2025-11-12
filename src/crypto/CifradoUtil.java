@@ -17,22 +17,18 @@ public class CifradoUtil {
         key = generator.generateKey();
     }
 
-    public static SecretKey getKey() {
-        return key;
-    }
-
-    public static String cifrar(String s) throws Exception {
+    public static String encrypt(String s) throws Exception {
         if (key == null) {
             throw new IllegalStateException("Key not initialized. Call init() fist");
         }
-        return cifrar(s, key);
+        return encrypt(s, key);
     }
 
-    private static String cifrar(String s, SecretKey k) throws Exception {
+    private static String encrypt(String s, SecretKey k) throws Exception {
         encryptionCipher = Cipher.getInstance("AES");
         encryptionCipher.init(Cipher.ENCRYPT_MODE, k);
-        byte[] textoCifrado = encryptionCipher.doFinal(s.getBytes());
-        return encode(textoCifrado);
+        byte[] messageEncripted = encryptionCipher.doFinal(s.getBytes());
+        return encode(messageEncripted);
     }
 
     private static String encode(byte[] data) {
@@ -43,19 +39,19 @@ public class CifradoUtil {
         return Base64.getDecoder().decode(data);
     }
 
-    public static String descifrar(String s) throws Exception {
+    public static String decrypt(String s) throws Exception {
         if (key == null) {
             throw new IllegalStateException("Key not initialized. Call init() first");
         }
-        return descifrar(s, key);
+        return decrypt(s, key);
     }
 
-    private static String descifrar(String textoCifrado, SecretKey k) throws Exception {
+    private static String decrypt(String textoCifrado, SecretKey k) throws Exception {
         byte[] messageInBytes = decode(textoCifrado);
         decryptionCipher = Cipher.getInstance("AES");
         // param espec
         decryptionCipher.init(Cipher.DECRYPT_MODE, k);
-        byte[] textoDescifrado = decryptionCipher.doFinal(messageInBytes);
-        return new String(textoDescifrado);
+        byte[] messageDecripted = decryptionCipher.doFinal(messageInBytes);
+        return new String(messageDecripted);
     }
 }
