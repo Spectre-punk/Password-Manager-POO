@@ -14,7 +14,11 @@ public class Credential {
         this.servicio = servicio;
         this.nombreUsuario = nombreUsuario;
         this.notas = notas;
-        this.contraseñaCifrada = CifradoUtil.cifrar(inputPassword);
+        try {
+            this.contraseñaCifrada = CifradoUtil.encrypt(inputPassword);
+        } catch (Exception e) {
+            throw new IllegalStateException("Failded to encrypt password for service" + servicio, e);
+        }
     }
 
     public String getServicio() {
@@ -50,6 +54,6 @@ public class Credential {
         return "servicio:" + servicio
                 + "\nnombre de usuario:" + nombreUsuario
                 + "\nnotas:" + notas
-                + "\ncontraseña:" + CifradoUtil.descifrar(contraseñaCifrada);
+                + "\ncontraseña:" + CifradoUtil.decrypt(contraseñaCifrada);
     }
 }
