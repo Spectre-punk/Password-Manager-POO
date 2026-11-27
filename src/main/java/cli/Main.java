@@ -32,7 +32,10 @@ public final class Main {
     }
 
     public static void main(String[] args) {
-        System.exit(run(args));
+        int code = run(args);
+        if (code != 0) {
+            System.exit(code);
+        }
     }
 
     /**
