@@ -109,6 +109,60 @@ public class UsuarioMaestro extends Usuario {
     }
 
     /**
+     * Re-encrypts the existing private keys under a new master password and
+     * produces fresh metadata (new salt and verifier) while keeping the same
+     * public keys. The credentials blob is untouched by this operation.
+     *
+     * @param newPassword       new master password (wiped by the caller)
+     * @param kemPrivateKey     existing KEM private key
+     * @param signingPrivateKey existing Ed25519 private key
+     * @return new metadata for the same key pairs
+     * @throws GeneralSecurityException if re-encryption fails
+     */
+    public UsuarioMaestro reencrypt(char[] newPassword, PrivateKey kemPrivateKey,
+                                    PrivateKey signingPrivateKey) throws GeneralSecurityException {
+        Objects.requireNonNull(newPassword, "newPassword");
+        Objects.requireNonNull(kemPrivateKey, "kemPrivateKey");
+        Objects.requireNonNull(signingPrivateKey, "signingPrivateKey");
+        if (newPassword.length == 0) {
+            throw new IllegalArgumentException("newPassword must not be empty");
+        }
+
+        byte[] saltBytes = Argon2KDF.generateSalt();
+        byte[] master = null;
+        byte[] kek = null;
+        byte[] seed = null;
+        try {
+            master = Argon2KDF.deriveKey(newPassword, saltBytes, MASTER_KEY_LENGTH_BYTES);
+            kek = Arrays.copyOfRange(master, 0, KEK_LENGTH_BYTES);
+            seed = Arrays.copyOfRange(master, KEK_LENGTH_BYTES, MASTER_KEY_LENGTH_BYTES);
+
+            BigInteger secret = SchnorrZKP.secretFromSeed(seed);
+            BigInteger verifierValue = SchnorrZKP.computeVerifier(secret);
+
+            EncryptedKey encryptedKem = encryptPrivateKey(kemPrivateKey, kek);
+            EncryptedKey encryptedSigning = encryptPrivateKey(signingPrivateKey, kek);
+
+            UsuarioMaestro nuevo = new UsuarioMaestro();
+            nuevo.nombreDeUsuario = this.nombreDeUsuario;
+            nuevo.salt = b64(saltBytes);
+            nuevo.verifier = b64(verifierValue.toByteArray());
+            nuevo.kemPublicKey = this.kemPublicKey;
+            nuevo.kemPrivateKeyIv = encryptedKem.iv();
+            nuevo.kemPrivateKeyCiphertext = encryptedKem.ciphertext();
+            nuevo.signingPublicKey = this.signingPublicKey;
+            nuevo.signingPrivateKeyIv = encryptedSigning.iv();
+            nuevo.signingPrivateKeyCiphertext = encryptedSigning.ciphertext();
+            return nuevo;
+        } finally {
+            SecretWiper.wipe(master);
+            SecretWiper.wipe(kek);
+            SecretWiper.wipe(seed);
+            SecretWiper.wipe(saltBytes);
+        }
+    }
+
+    /**
      * Runs the 3-step Schnorr protocol against the stored verifier. A wrong
      * password yields a wrong secret and the proof fails; no hash comparison is
      * performed.

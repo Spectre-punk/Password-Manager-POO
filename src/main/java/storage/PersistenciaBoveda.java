@@ -121,6 +121,58 @@ public final class PersistenciaBoveda {
     }
 
     /**
+     * Re-wraps the DEK under the (unchanged) KEM public key and replaces the
+     * vault metadata/signature, reusing the existing AES-GCM credentials blob
+     * byte-for-byte. Used when only the master password changes.
+     *
+     * @param path              vault file
+     * @param originalPayload   payload whose credentials blob must be preserved
+     * @param newUsuario        metadata encrypted under the new KEK
+     * @param dek               unchanged 32-byte DEK
+     * @param signingPrivateKey unchanged Ed25519 private key
+     */
+    public static void rewrap(Path path, VaultFile.VaultPayload originalPayload,
+                              UsuarioMaestro newUsuario, byte[] dek,
+                              PrivateKey signingPrivateKey)
+            throws IOException, GeneralSecurityException {
+        Objects.requireNonNull(path, "path");
+        Objects.requireNonNull(originalPayload, "originalPayload");
+        Objects.requireNonNull(newUsuario, "newUsuario");
+        Objects.requireNonNull(dek, "dek");
+        Objects.requireNonNull(signingPrivateKey, "signingPrivateKey");
+        if (originalPayload.getCredentialsIv() == null
+                || originalPayload.getCredentialsCiphertext() == null) {
+            throw new IllegalArgumentException("original payload has no credentials blob");
+        }
+        if (dek.length != VaultCipher.KEY_LENGTH_BYTES) {
+            throw new IllegalArgumentException("dek must be 32 bytes");
+        }
+
+        SecretKey dekKey = new SecretKeySpec(dek, "AES");
+        byte[] wrappedDek = null;
+        try {
+            wrappedDek = KeyEncapsulator.encapsulate(dekKey, newUsuario.getKemPublicKey());
+
+            VaultFile.VaultPayload payload = new VaultFile.VaultPayload();
+            payload.setUsuario(newUsuario);
+            payload.setEncapsulatedDek(b64(wrappedDek));
+            payload.setCredentialsIv(originalPayload.getCredentialsIv());
+            payload.setCredentialsCiphertext(originalPayload.getCredentialsCiphertext());
+
+            byte[] signature = DigitalSigner.sign(signingInput(payload), signingPrivateKey);
+
+            VaultFile file = new VaultFile();
+            file.setPayload(payload);
+            file.setSignature(b64(signature));
+
+            writeAtomically(path, FILE_GSON.toJson(file));
+        } finally {
+            SecretWiper.wipe(wrappedDek);
+            SecretWiper.destroy(dekKey);
+        }
+    }
+
+    /**
      * Reads the vault and verifies its signature before returning.
      *
      * @param path vault file

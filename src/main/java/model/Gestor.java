@@ -74,9 +74,18 @@ public final class Gestor {
     public synchronized void desbloquear(Path vaultPath, char[] masterPassword)
             throws IOException, GeneralSecurityException {
         Objects.requireNonNull(vaultPath, "vaultPath");
+        desbloquear(PersistenciaBoveda.read(vaultPath), vaultPath, masterPassword);
+    }
+
+    /**
+     * Unlocks an already-read (and signature-verified) vault file.
+     */
+    public synchronized void desbloquear(VaultFile file, Path vaultPath, char[] masterPassword)
+            throws GeneralSecurityException {
+        Objects.requireNonNull(file, "file");
+        Objects.requireNonNull(vaultPath, "vaultPath");
         lock();
 
-        VaultFile file = PersistenciaBoveda.read(vaultPath);
         UsuarioMaestro user = file.getPayload().getUsuario();
         UsuarioMaestro.UnlockedKeys keys = user.unlock(masterPassword);
 
@@ -105,6 +114,29 @@ public final class Gestor {
     public synchronized void guardar() throws IOException, GeneralSecurityException {
         requireUnlocked();
         PersistenciaBoveda.save(vaultPath, usuario, dek, credenciales, signingPrivateKey);
+    }
+
+    /**
+     * Changes the master password. Re-encrypts the existing private keys under
+     * the new KEK and re-wraps the same DEK; the credentials blob is preserved
+     * byte-for-byte.
+     */
+    public synchronized void cambiarContraseñaMaestra(char[] currentPassword, char[] newPassword)
+            throws IOException, GeneralSecurityException {
+        requireUnlocked();
+        Objects.requireNonNull(currentPassword, "currentPassword");
+        Objects.requireNonNull(newPassword, "newPassword");
+        if (newPassword.length == 0) {
+            throw new IllegalArgumentException("newPassword must not be empty");
+        }
+        if (!usuario.authenticate(currentPassword)) {
+            throw new SecurityException("Invalid master password");
+        }
+
+        UsuarioMaestro nuevo = usuario.reencrypt(newPassword, kemPrivateKey, signingPrivateKey);
+        VaultFile file = PersistenciaBoveda.read(vaultPath);
+        PersistenciaBoveda.rewrap(vaultPath, file.getPayload(), nuevo, dek, signingPrivateKey);
+        this.usuario = nuevo;
     }
 
     /** Ends the session and zeroizes the DEK. */
