@@ -4,6 +4,9 @@ target/
 # Compiled classes
 *.class
 
+# Local vault data (contains encrypted credentials; never commit)
+/boveda.json
+
 # IDE / editor
 .idea/
 *.iml

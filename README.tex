@@ -1,0 +1,488 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+}
+
+\title{Password Manager (POO)\\[0.3em]\large Secure Single-User CLI Vault}
+\author{Academic exercise in object-oriented programming and applied cryptography}
+\date{}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\bigskip
+
+\noindent
+A local, offline, single-user password manager written in \textbf{Java 21}. It keeps
+all credentials in one authenticated, encrypted file (\texttt{boveda.json}) and is
+operated entirely from the terminal. There is no server, no cloud account and no
+telemetry: confidentiality and integrity depend only on your master password and
+standard cryptography.
+
+The project demonstrates three security indicators end-to-end:
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Indicator & Primitive \\
+\midrule
+IND1 --- Key encapsulation     & RSA-3072 OAEP-SHA256 wrapping a random AES-256 DEK \\
+IND2 --- Digital signatures   & Ed25519 over the canonical vault payload \\
+IND3 --- Zero-knowledge proof & Interactive Schnorr proof over RFC 3526 Group 14 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{What this project does}
+
+In plain terms:
+
+\begin{enumerate}
+  \item \textbf{You create a vault once.} On first launch you choose a username and a
+        master password. The program generates all cryptographic material and writes
+        \texttt{boveda.json}.
+  \item \textbf{You unlock the vault with your master password.} The program verifies the
+        file's signature first, then proves you know the master password using a
+        zero-knowledge proof. A wrong password is rejected; the password itself is
+        never stored.
+  \item \textbf{You manage credentials.} From a text menu you can add a credential
+        (service, username, notes, password), list entries without revealing
+        passwords, or view one entry's full details.
+  \item \textbf{You save and exit.} Saving re-encrypts the credential list, signs the
+        payload and writes the file atomically; exiting wipes the session key and
+        decrypted credentials from memory.
+  \item \textbf{You can change the master password.} Only the small private-key
+        material is re-encrypted and the data key re-wrapped; the (potentially large)
+        credentials blob is \textbf{not} re-encrypted.
+\end{enumerate}
+
+Everything is stored locally in a single JSON file. Losing the file means losing the
+vault; losing the master password means the vault cannot be recovered.
+
+\subsection{Feature summary}
+
+\begin{longtable}{@{}p{5.2cm}p{9cm}@{}}
+\toprule
+Feature & Behaviour \\
+\midrule
+First-run registration & Username + master password (with confirmation) creates a new vault \\
+Signature-first login & Ed25519 signature verified \textbf{before} the password is requested \\
+Password authentication & Three-move Schnorr proof; no password hash stored \\
+Add credential & Service, username, notes, optional generated password \\
+List credentials & Shows service, username and notes; never the password \\
+View credential & Full details for one selected entry, including password \\
+Password generator & \texttt{SecureRandom}, 15 characters plus \texttt{-} separators \\
+Master-password rotation & Re-encrypts private keys, re-wraps DEK, keeps credentials blob \\
+Secure input & \texttt{System.console().readPassword()} with \texttt{Scanner} fallback \\
+Atomic persistence & Temporary file + atomic rename, owner-only permissions on POSIX \\
+Memory hygiene & Secrets as \texttt{char[]}/\texttt{byte[]}, wiped on lock/exit where possible \\
+Standalone evidence & Three executable classes for IND1, IND2, IND3 \\
+Automated tests & 63 JUnit~5 tests, including abuse scenarios \\
+\bottomrule
+\end{longtable}
+
+\section{Quick start}
+
+\subsection{Prerequisites}
+\begin{itemize}
+  \item JDK \textbf{21} or newer
+  \item Maven \textbf{3.9+}
+\end{itemize}
+
+\subsection{Run the tests}
+\begin{lstlisting}
+mvn clean test
+\end{lstlisting}
+Expected: \textbf{63 tests, 0 failures, 0 errors}.
+
+\subsection{Run the application}
+\begin{lstlisting}
+mvn exec:java
+\end{lstlisting}
+\texttt{cli.Main} is the default main class. To use a specific vault path:
+\begin{lstlisting}
+mvn exec:java -Dexec.args="/path/to/boveda.json"
+\end{lstlisting}
+On first run the program asks for a username and a master password (twice) and
+creates \texttt{boveda.json} in the current directory (or at the given path). On
+later runs it asks only for the master password and opens the menu.
+
+\subsection{Build a jar}
+\begin{lstlisting}
+mvn clean package
+\end{lstlisting}
+The resulting jar is \textbf{not} a fat jar; dependencies must be on the classpath.
+The manifest main class is \texttt{cli.Main}.
+
+\paragraph{Secure input note.} \texttt{System.console().readPassword()} masks input
+with a real terminal console. Without a console (IDE run configurations, pipes,
+Maven \texttt{exec:java}) the program falls back to line-based \texttt{Scanner} and
+input may be echoed. For daily use, run from a terminal or an IDE console.
+
+\section{How to use it}
+
+\subsection{First run (registration)}
+\begin{lstlisting}
+No vault found. First-run registration.
+Username: alice
+Master password: ********
+Confirm master password: ********
+Vault created: /home/alice/boveda.json
+\end{lstlisting}
+The program generates a random salt, derives the master key with Argon2id, computes
+the Schnorr verifier, creates RSA and Ed25519 key pairs, encrypts the private keys,
+generates a random data key, signs the payload and writes the vault.
+
+\subsection{Later runs (login)}
+\begin{lstlisting}
+Master password: ********
+Vault unlocked.
+\end{lstlisting}
+The signature is checked before the password prompt. A wrong password is rejected;
+after three failed attempts the program exits with a security error.
+
+\subsection{Main menu}
+\begin{lstlisting}
+=== Password Manager ===
+1. Add credential
+2. List credentials
+3. View credential details
+4. Change master password
+5. Save, wipe memory and exit
+0. Exit without saving
+Option:
+\end{lstlisting}
+
+\begin{description}
+  \item[Option 1 --- Add credential] Prompts: \texttt{Service}, \texttt{Username/email},
+    \texttt{Notes}, \texttt{Generate a password? (y/N)}, \texttt{Password}. If you
+    answer \texttt{y}, a password is generated, printed for copying, and stored
+    without asking you to type one. Each added credential is saved immediately.
+  \item[Option 2 --- List credentials] Shows \texttt{n. service | username | notes};
+    stored passwords are never printed.
+  \item[Option 3 --- View credential] Select an entry by number to print service,
+    username, notes and password. The password is copied into a temporary
+    \texttt{char[]}, printed, then wiped.
+  \item[Option 4 --- Change master password] Prompts for current, new and confirmed
+    new master password. Current password is checked with ZKP; private keys are
+    re-encrypted under a new KEK from a fresh salt; verifier recomputed; DEK
+    re-wrapped; payload re-signed; encrypted credentials reused byte-for-byte; old
+    password stops working immediately.
+  \item[Option 5 / 0 --- Exit] \texttt{5} saves, wipes session key, exits;
+    \texttt{0} exits without saving (read-only session).
+\end{description}
+
+\section{How it works}
+
+\subsection{Session lifecycle}
+\begin{lstlisting}
+lock --register/login--> unlocked --menu operations--> save --> locked
+                          |
+                          +-- exit / error --> wipe DEK, keys, credentials
+\end{lstlisting}
+While locked, no DEK, private key or decrypted credential is kept. While unlocked,
+the DEK and decrypted data live in process memory (trusted-RAM window).
+\texttt{Gestor.lock()} zeroizes the DEK buffer, clears credential passwords and
+drops private-key references.
+
+\subsection{Data flow}
+\begin{lstlisting}
+master password (char[])
+        |
+        +-- Argon2id(password, salt, 64 bytes)
+        |       +-- bytes  0..31  -> KEK (AES-256)
+        |       +-- bytes 32..63  -> Schnorr secret seed
+        |                            +- x in [1, q-1]  ->  Y = g^x mod p
+        |
+        +-- KEK --AES-256-GCM--> RSA private key
+        |                     +-> Ed25519 private key
+        |
+        +-- random DEK (32 bytes) <--RSA-OAEP-SHA256-- KEM public key
+                 |
+                 +--AES-256-GCM--> credentials JSON blob
+\end{lstlisting}
+
+\subsection{Registration}
+\begin{enumerate}
+  \item Generate a 16-byte random salt.
+  \item Derive 64 bytes with Argon2id.
+  \item First 32 bytes = KEK; last 32 bytes = Schnorr seed.
+  \item Compute verifier $Y = g^x \bmod p$ and store it (public).
+  \item Generate RSA-3072 KEM key pair and Ed25519 signing key pair.
+  \item Encrypt both private keys with AES-256-GCM under the KEK.
+  \item Generate random 32-byte DEK; wrap it with RSA-OAEP under KEM public key.
+  \item Sign canonical payload with Ed25519; write vault atomically.
+\end{enumerate}
+
+\subsection{Login}
+\begin{enumerate}
+  \item Read \texttt{boveda.json}.
+  \item Verify Ed25519 signature \textbf{before} asking for the password; mismatch
+        raises \texttt{SecurityException} immediately.
+  \item Prompt for master password.
+  \item Run three-move Schnorr proof against stored verifier: prover sends
+        commitment $R = g^r \bmod p$; verifier sends random challenge $c$; prover
+        sends $s = (r + c \cdot x) \bmod q$; verifier checks
+        $g^s \equiv R \cdot Y^c \pmod p$.
+  \item Only on success: derive KEK, decrypt private keys, decapsulate DEK, decrypt
+        credential blob and keep it in memory.
+\end{enumerate}
+
+\subsection{Saving}
+\begin{enumerate}
+  \item Serialize credentials to JSON (passwords as numeric UTF-16 code units,
+        never strings).
+  \item Encrypt JSON with AES-256-GCM under DEK (fresh 96-bit nonce).
+  \item Wrap DEK with RSA-OAEP under KEM public key.
+  \item Build payload; sign canonical JSON with Ed25519.
+  \item Write to temporary file; atomically move over \texttt{boveda.json}.
+\end{enumerate}
+
+\subsection{Master-password rotation}
+\begin{enumerate}
+  \item Re-derive KEK and Schnorr seed from new password with fresh salt.
+  \item Re-encrypt existing RSA and Ed25519 private keys under new KEK.
+  \item Recompute verifier $Y$.
+  \item Re-wrap the same DEK under unchanged KEM public key.
+  \item Re-sign payload.
+  \item Keep existing \texttt{credentialsIv} and \texttt{credentialsCiphertext} unchanged.
+\end{enumerate}
+
+\section{Architecture}
+
+\subsection{Packages and responsibilities}
+\begin{longtable}{@{}p{5.5cm}p{8.7cm}@{}}
+\toprule
+Package / class & Responsibility \\
+\midrule
+\texttt{cli.Main} & Interactive menu, secure input, registration/login, rotation \\
+\texttt{cli.PasswordManagerApp} & Registers the Bouncy Castle provider \\
+\texttt{crypto.Argon2KDF} & Argon2id key derivation (64 MiB, 3 iters, 16-byte salt) \\
+\texttt{crypto.VaultCipher} & AES-256-GCM encryption/decryption with fresh nonces \\
+\texttt{crypto.KeyEncapsulator} & RSA-3072 OAEP-SHA256 DEK encapsulation (IND1) \\
+\texttt{crypto.DigitalSigner} & Ed25519 key generation, signing, verification (IND2) \\
+\texttt{crypto.SchnorrZKP} & Schnorr registration and interactive proof (IND3) \\
+\texttt{model.Credential} & Credential POJO with \texttt{char[]} password \\
+\texttt{model.Usuario} & Base user type holding public identity data \\
+\texttt{model.UsuarioMaestro} & Salt, verifier, public keys, KEK-encrypted private keys, rotation \\
+\texttt{model.Gestor} & Singleton session manager: unlock, save, lock, rotation \\
+\texttt{storage.VaultFile} & Gson DTO for on-disk payload and signature \\
+\texttt{storage.PersistenciaBoveda} & Save/load, signature verification, decryption, re-wrap \\
+\texttt{util.SecretWiper} & Best-effort zeroization of \texttt{byte[]}, \texttt{char[]}, keys \\
+\texttt{util.GeneradorDeContrase\~nas} & \texttt{SecureRandom} password generator \\
+\texttt{evidencias.*} & Standalone IND1/IND2/IND3 demonstration programs \\
+\bottomrule
+\end{longtable}
+
+\subsection{Key hierarchy}
+\begin{itemize}
+  \item Master password $\to$ Argon2id $\to$ \textbf{KEK} + Schnorr seed.
+  \item KEK $\to$ AES-256-GCM $\to$ RSA and Ed25519 private keys.
+  \item Random DEK $\to$ AES-256-GCM $\to$ credentials blob.
+  \item DEK $\to$ RSA-OAEP-SHA256 $\to$ \texttt{encapsulatedDek}.
+  \item Schnorr seed $\to x \to Y = g^x \bmod p$ (public verifier).
+\end{itemize}
+The DEK is independent of the master password, which makes rotation cheap: the
+password-derived material changes, but the DEK and credentials blob do not.
+
+\section{Vault file format}
+\texttt{boveda.json} is UTF-8 JSON (abridged):
+\begin{lstlisting}
+{
+  "payload": {
+    "usuario": {
+      "salt": "<base64 16 bytes>",
+      "verifier": "<base64 Y>",
+      "kemPublicKey": "<base64 X.509 RSA>",
+      "kemPrivateKeyIv": "<base64 12 bytes>",
+      "kemPrivateKeyCiphertext": "<base64 AES-GCM>",
+      "signingPublicKey": "<base64 X.509 Ed25519>",
+      "signingPrivateKeyIv": "<base64 12 bytes>",
+      "signingPrivateKeyCiphertext": "<base64 AES-GCM>",
+      "nombreDeUsuario": "alice"
+    },
+    "encapsulatedDek": "<base64 RSA-OAEP>",
+    "credentialsIv": "<base64 12 bytes>",
+    "credentialsCiphertext": "<base64 AES-GCM>"
+  },
+  "signature": "<base64 Ed25519 over the canonical payload>"
+}
+\end{lstlisting}
+Credential passwords are serialized as numeric UTF-16 code units inside the
+encrypted blob --- never as JSON strings. The file is written atomically
+(temporary file + rename) with owner-only permissions on POSIX.
+
+\section{Security design}
+
+\subsection{Protected assets}
+\begin{longtable}{@{}p{4.6cm}p{3.6cm}p{6cm}@{}}
+\toprule
+Asset & Where it lives & Protection \\
+\midrule
+Master password & User memory / terminal only & Never stored; derives KEK + ZKP secret \\
+Credential passwords & \texttt{credentialsCiphertext} & AES-256-GCM under random DEK \\
+Credential metadata & Same encrypted blob & AES-256-GCM \\
+KEM private key (RSA) & \texttt{kemPrivateKeyCiphertext} & AES-256-GCM under KEK \\
+Signing private key (Ed25519) & \texttt{signingPrivateKeyCiphertext} & AES-256-GCM under KEK \\
+Data-encryption key (DEK) & \texttt{encapsulatedDek} & RSA-OAEP-SHA256 under KEM public key \\
+Vault integrity & \texttt{signature} & Ed25519 over canonical payload \\
+ZKP verifier $Y$ & \texttt{usuario.verifier} & Public; reveals nothing about password \\
+\bottomrule
+\end{longtable}
+
+\subsection{Threat model and trust assumptions}
+\begin{longtable}{@{}p{3.2cm}p{4.4cm}p{6.6cm}@{}}
+\toprule
+Adversary & Capability & Mitigation \\
+\midrule
+Offline disk attacker & Read/copy/modify/replace/delete vault & Argon2id slows guessing; Ed25519 rejects modification; AES-GCM rejects tampering; RSA-OAEP protects DEK \\
+Password guesser & Has vault; tries candidate passwords offline & Argon2id (64 MiB, 3 iters); Schnorr verifier is not a fast hash oracle \\
+File tamperer & Flips bytes in signature/ciphertext/metadata & Signature verified before decryption; mismatch raises \texttt{SecurityException} \\
+Impersonator & Runs Schnorr without master password & Wrong-secret proofs fail verification \\
+Wrong-key attacker & Unwraps DEK with unrelated RSA key & RSA-OAEP unwrap fails \\
+\bottomrule
+\end{longtable}
+
+\paragraph{Explicit trust assumptions.}
+RAM during an active session is trusted (memory scraping, debuggers, core dumps,
+swap, hibernation out of scope; \texttt{lock()} wipes best-effort). OS, JVM,
+\texttt{SecureRandom}, Bouncy Castle and Gson are trusted. Terminal is trusted
+(\texttt{readPassword()} avoids echo; keyloggers/shoulder surfing not prevented).
+Master password has reasonable entropy. Machine is not compromised while vault is
+open.
+
+\subsection{Cryptographic choices}
+\begin{longtable}{@{}p{3.6cm}p{3.4cm}p{3.8cm}p{3.4cm}@{}}
+\toprule
+Purpose & Primitive & Parameters & Why \\
+\midrule
+Password KDF & Argon2id (RFC 9106) & 64 MiB, 3 iters, parallelism 1, 16-byte salt, 64-byte output & Memory-hard, side-channel resistant; expensive offline guessing \\
+Vault encryption & AES-256-GCM & 256-bit key, 96-bit random nonce, 128-bit tag & AEAD confidentiality + integrity; no padding oracle \\
+Vault authentication & Ed25519 & 32-byte public key, 64-byte signature & Deterministic, fast, small, misuse-resistant \\
+DEK wrapping (IND1) & RSA-3072 OAEP & SHA-256 + MGF1-SHA256 & CCA-secure encapsulation with explicit hash pinning \\
+Password proof (IND3) & Schnorr ZKP & RFC 3526 Group 14: 2048-bit $p$, $q=(p-1)/2$, $g=2$ & Proves knowledge of $x$ without revealing password or hash \\
+Randomness & \texttt{SecureRandom} & JCA default & Salts, nonces, keys, challenges \\
+\bottomrule
+\end{longtable}
+
+\subsection{Known limitations}
+\begin{itemize}
+  \item Vault substitution / key substitution: Ed25519 public key stored inside
+        signed payload; whole-file replacement not detected without key pinning /
+        out-of-band fingerprint (TOFU is future work).
+  \item Rollback and deletion: older valid vault can be restored; no monotonic counter.
+  \item Metadata leakage: file size / ciphertext length reveal approximate count/size.
+  \item Memory wiping is best-effort; \texttt{BigInteger} secrets cannot be zeroized.
+  \item Single user, local only; no multi-user access control, sync, recovery, audit
+        log, GUI or clipboard integration.
+  \item Not production-ready: teaching/academic implementation.
+\end{itemize}
+
+\section{Micro-evidence programs}
+Three independent \texttt{main} classes under \texttt{src/main/java/evidencias/}
+demonstrate IND1, IND2 and IND3 in isolation, printing inputs, outputs and explicit
+\texttt{PASS}/\texttt{FAIL} lines, ending with \texttt{[RESULT] PASS}.
+\begin{lstlisting}
+mvn exec:java -Dexec.mainClass=evidencias.EvidenciaKEM
+mvn exec:java -Dexec.mainClass=evidencias.EvidenciaFirma
+mvn exec:java -Dexec.mainClass=evidencias.EvidenciaZKP
+\end{lstlisting}
+Output is reproducible: fixed demo DEK/password/salt and the RFC 8032 Ed25519 test
+vector; randomized values are not printed. IND1 checks recovered DEK equals input,
+tampered encapsulation rejected, unrelated key rejected. IND2 checks RFC 8032
+vector, valid signature accepted, one-byte tampering rejected, different message
+rejected. IND3 checks verifier in order-$q$ subgroup, deterministic registration,
+valid proof accepted, impersonation rejected, tampered response rejected.
+
+\section{Automated tests}
+\texttt{mvn clean test} runs \textbf{63 JUnit~5 tests}:
+\begin{itemize}
+  \item \textbf{crypto}: Argon2id vectors/parameters, AES-GCM round-trip and
+        tamper/wrong-key rejection, RSA-OAEP KEM, Ed25519 sign/verify, Schnorr
+        proof and impersonation rejection.
+  \item \textbf{model}: \texttt{Credential} secret handling, \texttt{UsuarioMaestro}
+        registration/ZKP/unlock, \texttt{Gestor} session lifecycle, DEK zeroization,
+        master-password rotation.
+  \item \textbf{storage}: save/reload round-trip, tampered-signature abort,
+        verify-before-decrypt, wrong-DEK AEAD failure.
+  \item \textbf{security}: full end-to-end lifecycle + abuse scenarios: one-byte file
+        tampering, one-byte AES-GCM tampering (\texttt{AEADBadTagException}), ZKP
+        impersonation, unrelated KEM private key.
+  \item \textbf{cli}: scripted registration/login/menu sessions across restarts,
+        wrong-password lockout, password rotation through the menu.
+  \item \textbf{util}: secure password generator.
+\end{itemize}
+Notable negative tests: flip one byte of Ed25519 signature $\to$ \texttt{SecurityException}
+before decryption; flip one byte of AES-GCM ciphertext $\to$ \texttt{AEADBadTagException};
+wrong password $\to$ proof verification returns \texttt{false}; decapsulate DEK with
+unrelated RSA key $\to$ \texttt{GeneralSecurityException}.
+
+\section{Project structure}
+\begin{lstlisting}
+src/main/java/
+  cli/          Main (interactive CLI), PasswordManagerApp (provider bootstrap)
+  crypto/       Argon2KDF, VaultCipher, KeyEncapsulator, DigitalSigner, SchnorrZKP
+  model/        Credential, Usuario, UsuarioMaestro, Gestor
+  storage/      VaultFile (DTO), PersistenciaBoveda (save/load/verify/rewrap)
+  util/         SecretWiper, GeneradorDeContraseñas
+  evidencias/   EvidenciaKEM, EvidenciaFirma, EvidenciaZKP
+src/test/java/  crypto, model, storage, security, cli, util
+pom.xml
+README.md
+\end{lstlisting}
+
+\section{Licensing and legal considerations}
+\begin{tabular}{@{}ll@{}}
+\toprule
+Component & License \\
+\midrule
+Bouncy Castle (\texttt{bcprov-jdk18on}) & MIT-style permissive license \\
+Gson (\texttt{com.google.code.gson:gson}) & Apache License 2.0 \\
+JUnit Jupiter & Eclipse Public License 2.0 \\
+Apache Maven plugins & Apache License 2.0 \\
+\bottomrule
+\end{tabular}
+
+\bigskip
+If redistributing the project or a binary bundling dependencies: keep Bouncy
+Castle copyright/license notice; keep Gson \texttt{LICENSE}/\texttt{NOTICE} per
+Apache~2.0; add a \texttt{LICENSE} file (academic coursework; MIT is a compatible
+simple choice). Standard public cryptography is used; verify local export/import
+regulations before distributing binaries.
+
+\section{Project status}
+\begin{tabular}{@{}cll@{}}
+\toprule
+Phase & Scope & State \\
+\midrule
+1 & Maven/Java 21 scaffolding, Bouncy Castle provider & Done \\
+2 & Cryptographic primitives and unit tests & Done \\
+3 & Domain model and authenticated JSON persistence & Done \\
+4 & Interactive CLI, registration/login, credential management, rotation & Done \\
+5 & End-to-end and abuse-scenario tests & Done \\
+6 & Standalone evidence programs and technical documentation & Done \\
+\bottomrule
+\end{tabular}
+
+\bigskip
+\textbf{63 tests pass} (\texttt{mvn clean test}). The three evidence programs run
+cleanly and produce reproducible output. Intended for academic demonstration, not
+production deployment.
+
+\end{document}
