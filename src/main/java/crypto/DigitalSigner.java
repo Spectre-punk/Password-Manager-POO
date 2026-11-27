@@ -6,6 +6,7 @@ import java.security.KeyPairGenerator;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.Signature;
+import java.security.SignatureException;
 import java.util.Objects;
 
 /**
@@ -72,6 +73,11 @@ public final class DigitalSigner {
         Signature verifier = Signature.getInstance(ALGORITHM);
         verifier.initVerify(publicKey);
         verifier.update(data);
-        return verifier.verify(signature);
+        try {
+            return verifier.verify(signature);
+        } catch (SignatureException e) {
+            // Malformed signatures (e.g. invalid curve point) are simply invalid.
+            return false;
+        }
     }
 }

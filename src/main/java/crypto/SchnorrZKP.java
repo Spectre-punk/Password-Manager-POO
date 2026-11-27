@@ -65,13 +65,33 @@ public final class SchnorrZKP {
      * @return the secret exponent {@code x}
      */
     public static BigInteger deriveSecret(char[] masterPassword, byte[] salt) {
-        byte[] key = Argon2KDF.deriveKey(masterPassword, salt);
+        byte[] master = Argon2KDF.deriveKey(masterPassword, salt, 64);
         try {
-            BigInteger secret = new BigInteger(1, key).mod(Q);
-            return secret.signum() == 0 ? BigInteger.ONE : secret;
+            byte[] seed = Arrays.copyOfRange(master, 32, 64);
+            try {
+                return secretFromSeed(seed);
+            } finally {
+                Arrays.fill(seed, (byte) 0);
+            }
         } finally {
-            Arrays.fill(key, (byte) 0);
+            Arrays.fill(master, (byte) 0);
         }
+    }
+
+    /**
+     * Maps a seed (for example the second half of a 64-byte Argon2 output)
+     * into the Schnorr secret range {@code [1, q - 1]}.
+     *
+     * @param seed non-empty seed bytes
+     * @return the secret exponent {@code x}
+     */
+    public static BigInteger secretFromSeed(byte[] seed) {
+        Objects.requireNonNull(seed, "seed");
+        if (seed.length == 0) {
+            throw new IllegalArgumentException("seed must not be empty");
+        }
+        BigInteger secret = new BigInteger(1, seed).mod(Q);
+        return secret.signum() == 0 ? BigInteger.ONE : secret;
     }
 
     /**

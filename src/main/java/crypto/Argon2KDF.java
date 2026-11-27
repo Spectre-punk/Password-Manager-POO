@@ -59,12 +59,30 @@ public final class Argon2KDF {
      * @throws IllegalArgumentException if the password or salt is invalid
      */
     public static byte[] deriveKey(char[] password, byte[] salt) {
+        return deriveKey(password, salt, KEY_LENGTH_BYTES);
+    }
+
+    /**
+     * Derives an arbitrary-length key with Argon2id. Phase 3 uses 64 bytes:
+     * the first 32 bytes are the vault KEK and the last 32 bytes seed the
+     * Schnorr secret, keeping the two purposes cryptographically separated.
+     *
+     * @param password master password, never {@code null} or empty
+     * @param salt     16-byte random salt
+     * @param length   number of bytes to derive, must be positive
+     * @return a new key of {@code length} bytes
+     * @throws IllegalArgumentException if an argument is invalid
+     */
+    public static byte[] deriveKey(char[] password, byte[] salt, int length) {
         if (password == null || password.length == 0) {
             throw new IllegalArgumentException("password must not be null or empty");
         }
         if (salt == null || salt.length != SALT_LENGTH_BYTES) {
             throw new IllegalArgumentException(
                     "salt must be exactly " + SALT_LENGTH_BYTES + " bytes");
+        }
+        if (length <= 0) {
+            throw new IllegalArgumentException("length must be positive");
         }
 
         Argon2Parameters parameters = new Argon2Parameters.Builder(Argon2Parameters.ARGON2_id)
@@ -78,7 +96,7 @@ public final class Argon2KDF {
         Argon2BytesGenerator generator = new Argon2BytesGenerator();
         generator.init(parameters);
 
-        byte[] derivedKey = new byte[KEY_LENGTH_BYTES];
+        byte[] derivedKey = new byte[length];
         generator.generateBytes(password, derivedKey);
         return derivedKey;
     }
