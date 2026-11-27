@@ -1,0 +1,603 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[spanish]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+}
+
+\title{Password Manager (POO)\\[0.3em]\large Bóveda CLI Segura de Usuario Único\\Fundamento Criptográfico y Matemático}
+\author{[Tu Nombre / Equipo] --- Ingeniería en Criptografía Aplicada}
+\date{\today}
+
+\newcommand{\Zq}{\mathbb{Z}_q}
+\newcommand{\Fp}{\mathbb{F}_p}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\bigskip
+
+\noindent
+Gestor de contraseñas local, \emph{offline}, de usuario único escrito en
+\textbf{Java 21} (Maven; Bouncy Castle + Gson). Todas las credenciales se guardan
+en un único archivo JSON autenticado y cifrado (\texttt{boveda.json}); no hay
+servidor, nube ni telemetría. La confidencialidad e integridad dependen solo de la
+contraseña maestra y de criptografía estándar. El proyecto es un ejercicio
+académico de POO y criptografía aplicada y demuestra tres indicadores de seguridad
+de extremo a extremo, con salida reproducible (ver §\ref{sec:micro}).
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+Indicador & Primitiva \\
+\midrule
+IND1 --- Encapsulación de claves & RSA-3072 OAEP-SHA256 envolviendo un DEK aleatorio AES-256 \\
+IND2 --- Firmas digitales        & Ed25519 sobre el \emph{payload} canónico de la bóveda \\
+IND3 --- Prueba de conocimiento cero & Schnorr interactivo sobre RFC 3526 Grupo 14 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Definición del problema y activos}
+
+\subsection{Problema}
+El usuario posee muchas credenciales (servicio, usuario/email, notas, contraseña)
+y necesita almacenarlas localmente con \textbf{confidencialidad} (nadie sin la
+contraseña maestra puede leerlas), \textbf{integridad/autenticidad} (cualquier
+modificación del archivo se detecta), \textbf{autenticación del usuario}
+(demostrar conocimiento de la contraseña maestra sin almacenarla ni un hash
+suyo), \textbf{gestión de claves} (generación, cifrado de claves privadas,
+rotación de la contraseña maestra) y \textbf{higiene de memoria} en la medida que
+permite la JVM. Todo desde una CLI, sin componentes en red.
+
+\subsection{Activos a proteger}
+\begin{longtable}{@{}p{4.6cm}p{3.4cm}p{6.2cm}@{}}
+\toprule
+Activo & Dónde vive & Protección \\
+\midrule
+Contraseña maestra $P$ & Solo memoria del usuario / terminal & Nunca se almacena; deriva KEK y secreto ZKP; entrada segura \\
+Contraseñas de credenciales & \texttt{credentialsCiphertext} & AES-256-GCM bajo DEK aleatorio \\
+Metadatos de credenciales & Mismo \emph{blob} cifrado & AES-256-GCM \\
+Clave privada KEM (RSA) & \texttt{kemPrivateKeyCiphertext} & AES-256-GCM bajo KEK; PKCS\#8 \\
+Clave privada de firma (Ed25519) & \texttt{signingPrivateKeyCiphertext} & AES-256-GCM bajo KEK; PKCS\#8 \\
+Clave de datos DEK & \texttt{encapsulatedDek} & RSA-OAEP-SHA256 bajo clave pública KEM \\
+KEK & Nunca se persiste & Argon2id$(P,S)$ bytes $[0..31]$; destruida tras uso \\
+Integridad de la bóveda & \texttt{signature} & Ed25519 sobre JSON canónico del \emph{payload} \\
+Verificador ZKP $Y$ & \texttt{usuario.verifier} & Público; no revela nada sobre $P$ \\
+\bottomrule
+\end{longtable}
+
+\section{Modelo de amenazas y supuestos explícitos}
+
+\subsection{Adversarios considerados}
+\begin{longtable}{@{}p{3.4cm}p{4.2cm}p{6.6cm}@{}}
+\toprule
+Adversario & Capacidad & Mitigación \\
+\midrule
+Atacante offline de disco & Leer, copiar, modificar, reemplazar o borrar \texttt{boveda.json} & Argon2id encarece adivinar; Ed25519 rechaza modificaciones; AES-GCM rechaza manipulación; RSA-OAEP protege el DEK; verificación \emph{antes} de descifrar \\
+Adivinador de contraseñas & Tiene el archivo; prueba candidatos offline & Argon2id (64 MiB, 3 iteraciones); $Y$ no es un oráculo de hash rápido; ZKP no permite comprobar candidatos sin interactuar y producir prueba válida \\
+Manipulador de archivo & Voltea bytes de firma, \emph{ciphertext} o metadatos & Firma verificada primero; \texttt{SecurityException}; \texttt{AEADBadTagException} \\
+Impostor & Ejecuta Schnorr sin la contraseña maestra & Una prueba con $x' \neq x$ no verifica \\
+Atacante de clave incorrecta & Desempaqueta el DEK con RSA ajeno & Falla OAEP / \texttt{GeneralSecurityException} \\
+\bottomrule
+\end{longtable}
+
+\subsection{Fuera de alcance / supuestos}
+RAM durante una sesión activa es confiable (\emph{scraping}, depuradores, volcados
+de memoria, \emph{swap}, hibernación fuera de alcance; \texttt{Gestor.lock()} borra
+en \emph{best-effort}). Se confía en SO, JVM, \texttt{SecureRandom}, Bouncy Castle
+y Gson. Se confía en el terminal (\texttt{readPassword()} evita eco; \emph{keyloggers}
+y \emph{shoulder surfing} no se previenen). La contraseña maestra tiene entropía
+razonable; Argon2id no rescata una contraseña trivial. La máquina no está
+comprometida mientras la bóveda está abierta. Este documento no afirma
+producción: es demostración académica.
+
+\section{Arquitectura y jerarquía de llaves}
+
+\subsection{Paquetes}
+\begin{longtable}{@{}p{5.4cm}p{8.8cm}@{}}
+\toprule
+Paquete / clase & Responsabilidad \\
+\midrule
+\texttt{cli.Main} & Menú interactivo, entrada segura, registro/login, rotación \\
+\texttt{cli.PasswordManagerApp} & Registra el proveedor Bouncy Castle \\
+\texttt{crypto.Argon2KDF} & Argon2id RFC 9106 ($m{=}64$ MiB, $t{=}3$, $p{=}1$, salt 128 bits) \\
+\texttt{crypto.VaultCipher} & AES-256-GCM con \emph{nonces} aleatorios frescos \\
+\texttt{crypto.KeyEncapsulator} & RSA-3072 OAEP-SHA256 KEM (IND1) \\
+\texttt{crypto.DigitalSigner} & Ed25519 generar/firmar/verificar (IND2) \\
+\texttt{crypto.SchnorrZKP} & Registro y prueba interactiva Schnorr (IND3) \\
+\texttt{model.Credential} & POJO; contraseña \texttt{char[]} \\
+\texttt{model.UsuarioMaestro} & salt, verificador, claves públicas, privadas cifradas con KEK, rotación \\
+\texttt{model.Gestor} & \emph{Singleton}: desbloquear, guardar, \texttt{lock()}, rotación \\
+\texttt{storage.VaultFile} & DTO Gson del archivo \\
+\texttt{storage.PersistenciaBoveda} & Guardar/cargar, verificar firma, descifrar, \emph{re-wrap} \\
+\texttt{util.SecretWiper} & Puesta a cero \emph{best-effort} \\
+\texttt{util.GeneradorDeContrase\~nas} & Generador \texttt{SecureRandom} \\
+\texttt{evidencias.*} & Programas IND1/IND2/IND3 independientes \\
+\bottomrule
+\end{longtable}
+
+\subsection{Jerarquía de claves}
+Formalmente, con $P$ contraseña maestra y $S$ salt de 128 bits:
+\begin{align}
+  (K_{\text{KEK}}, \text{Seed}) &= \text{Argon2id}(P, S, m{=}2^{16}\,\text{KiB}, t{=}3, p{=}1, \ell{=}64),\\
+  K_{\text{KEK}} &= \text{Argon2id}(P,S)_{[0..31]}, \qquad \text{Seed} = \text{Argon2id}(P,S)_{[32..63]},\\
+  x &= \text{Seed} \bmod q,\quad x{=}1 \text{ si } x{=}0,\qquad x \in [1, q-1],\\
+  Y &= g^{x} \bmod p \quad (\text{verificador público}),\\
+  K_{\text{KEK}} &\xrightarrow{\text{AES-256-GCM}} \text{RSA privada},\ \text{Ed25519 privada (PKCS\#8)},\\
+  \text{DEK} &\xleftarrow{\$} \{0,1\}^{256},\qquad \texttt{encapsulatedDek} = \text{RSA-OAEP}_{pk}(\text{DEK}),\\
+  \text{credenciales} &\xrightarrow{\text{AES-256-GCM}_{\text{DEK}}} \texttt{credentialsCiphertext}.
+\end{align}
+\begin{itemize}
+  \item Contraseña maestra $\to$ Argon2id $\to$ \textbf{KEK} + \textbf{Schnorr seed}.
+  \item KEK $\to$ AES-256-GCM $\to$ claves privadas RSA y Ed25519.
+  \item \textbf{DEK} aleatoria $\to$ AES-256-GCM $\to$ \emph{blob} de credenciales.
+  \item DEK $\to$ RSA-OAEP-SHA256 $\to$ \texttt{encapsulatedDek}.
+  \item Schnorr seed $\to x \to Y = g^x \bmod p$.
+\end{itemize}
+El DEK es \textbf{independiente} de la contraseña maestra; por eso la rotación es
+barata (§\ref{sec:rot}).
+
+\subsection{Ciclo de sesión}
+\begin{lstlisting}
+lock --registro/login--> unlocked --menu--> save --> locked
+                          |
+                          +-- exit / error --> borrar DEK, claves, credenciales
+\end{lstlisting}
+En \texttt{locked} no se retiene DEK, clave privada ni credencial descifrada.
+\texttt{Gestor.lock()} pone a cero el buffer DEK, limpia contraseñas y suelta
+referencias a claves privadas.
+
+\section{Fundamento criptográfico y matemático}\label{sec:crypto}
+
+\subsection{IND0 (base): Argon2id --- derivación de claves RFC 9106 (\texttt{crypto.Argon2KDF})}
+\paragraph{Problema.} Una contraseña humana tiene poca entropía; un adversario con
+el archivo puede probar candidatos offline. Argon2id (ganador del PHC 2015;
+RFC~9106, versión \texttt{ARGON2\_VERSION\_13}) es \textbf{memory-hard}:
+impone memoria y tiempo por intento, frustrando GPU/ASIC/FPGA y \emph{time--memory
+tradeoffs}.
+
+\paragraph{Función.} Argon2 rellena una memoria de $m$ bloques de 1 KiB en $t$
+pasadas, mezclando con la permutación \emph{Blake2b} y direccionamiento de bloques;
+la salida se extrae con H' (Blake2b extendido). Argon2id es un \textbf{híbrido}:
+la(s) primera(s) pasada(s) usan direccionamiento \emph{data-independent} (estilo
+Argon2i, resistencia a \emph{side-channel}) y las siguientes \emph{data-dependent}
+(estilo Argon2d, resistencia a GPU/ASIC y TMTO). Formalmente, en términos de la
+función interna $G$ y la memoria $\mathbf{B}$:
+\[
+  \text{Argon2id}(P, S; m, t, p, \ell) = \text{H}'\big(\mathbf{B}^{(t)}\big),\qquad
+  \mathbf{B}^{(i)} = G\big(\mathbf{B}^{(i-1)}, \mathbf{B}^{(\phi(i))}\big),
+\]
+con índice $\phi(i)$ data-independent en la primera pasada y data-dependent
+después. \textbf{Parámetros reales del código} (\texttt{Argon2KDF}):
+\texttt{ARGON2\_id}, \texttt{ARGON2\_VERSION\_13}, $m = 64 \cdot 1024$ KiB $= 64$
+MiB (\texttt{MEMORY\_KIB}), $t = 3$ (\texttt{ITERATIONS}), $p = 1$
+(\texttt{PARALLELISM}), salt $= 16$ bytes (\texttt{SALT\_LENGTH\_BYTES}), salida
+$\ell = 64$ bytes en este proyecto (llave simple $\ell=32$ existe en
+\texttt{deriveKey} de 32 bytes; \texttt{UsuarioMaestro.MASTER\_KEY\_LENGTH\_BYTES}$=64$).
+
+\paragraph{Separación de dominios.} La salida de 512 bits se parte en dos mitades
+independientes con propósitos disjuntos, evitando reutilizar el mismo material
+criptográfico para cifrado y autenticación:
+\[
+  K_{\text{KEK}} = \text{Argon2id}(P,S)_{[0..31]},\qquad
+  \text{Seed}_{\text{ZKP}} = \text{Argon2id}(P,S)_{[32..63]},
+\]
+implementado en \texttt{UsuarioMaestro} (\texttt{KEK\_LENGTH\_BYTES}$=32$,
+\texttt{secretFromMaster}) y \texttt{SchnorrZKP.deriveSecret}. La contraseña
+nunca se convierte a \texttt{String}; se acepta como \texttt{char[]} y el llamador
+la borra. Salt aleatorio de 128 bits (\texttt{SecureRandom}) por usuario y por
+rotación. No se almacena ningún hash de contraseña.
+
+\subsection{Cifrado autenticado AEAD: AES-256-GCM (\texttt{crypto.VaultCipher})}
+\paragraph{Cifrado.} AES-256 en modo \textbf{Galois/Counter Mode}. Sea $K$ la
+clave de 256 bits, $J_0$ el bloque inicial derivado del \emph{nonce}, $H = E_K(0^{128})$
+la clave de autenticación. El cifrado es CTR:
+\[
+  C_i = P_i \oplus E_K(\text{inc}^{(i)}(J_0)),\qquad \text{(sin relleno; NoPadding)}.
+\]
+\paragraph{Autenticación.} Un polinomio sobre $\mathbb{F}_{2^{128}}$ (GHASH) sobre
+AAD, ciphertext y longitudes; el \emph{tag} de 128 bits es
+\[
+  T = \text{GHASH}_H(A, C, \ell_A, \ell_C) \oplus E_K(J_0),
+  \qquad \text{GHASH}_H(X) = \textstyle\sum_i X_i \cdot H^{m-i+1} \bmod (x^{128}+x^7+x^2+x+1).
+\]
+Cualquier modificación de \emph{ciphertext}/AAD hace fallar la verificación del
+tag $\Rightarrow$ \texttt{AEADBadTagException}. AEAD da confidencialidad
+\textbf{e} integridad; no hay oráculo de relleno.
+\paragraph{Nonce.} \texttt{IV\_LENGTH\_BYTES}$=12$ bytes aleatorios
+(\texttt{SecureRandom}) por cifrado; \texttt{TAG\_LENGTH\_BITS}$=128$;
+\texttt{KEY\_LENGTH\_BITS}$=256$; transformación \texttt{AES/GCM/NoPadding};
+clave exigida AES-256. \textbf{Requisito matemático de seguridad:} el \emph{nonce}
+$(K, \text{nonce})$ \textbf{nunca} debe repetirse. Reutilizar un par
+clave--nonce en GCM rompe la confidencialidad ($P_1 \oplus P_2 = C_1 \oplus C_2$)
+y permite \textbf{recuperación de $H$} y \textbf{forja de tags} (el \emph{forbidden
+attack}). Un nonce de 96 bits aleatorio es seguro hasta $\approx 2^{32}$ cifrados
+bajo la misma clave por el límite de cumpleaños; el proyecto usa nonces frescos
+en cada operación y la firma Ed25519 añade una segunda barrera de integridad.
+\paragraph{Uso.} Claves privadas PKCS\#8 bajo KEK (nonces IV separados por clave)
+y \emph{blob} de credenciales bajo DEK; \emph{char[]} convertido a UTF-8 con
+limpieza; contraseñas dentro del blob como \textbf{números UTF-16}, nunca strings.
+
+\subsection{IND1 --- Encapsulación de claves: RSA-3072 OAEP-SHA256 (\texttt{crypto.KeyEncapsulator})}
+\paragraph{RSA.} Elija primos $p, q$; $N = pq$; $\varphi(N) = (p-1)(q-1)$
+(o $\lambda(N) = \operatorname{lcm}(p-1, q-1)$); elija $e$ con
+$\gcd(e, \lambda)=1$; calcule $d \equiv e^{-1} \pmod{\lambda}$. Cifrado/firma:
+\[
+  c = m^{e} \bmod N,\qquad m = c^{d} \bmod N,\qquad ed \equiv 1 \pmod{\lambda}.
+\]
+Seguridad = dureza de factorizar $N$ / RSA-I. \textbf{RSA-3072} (módulo de 3072
+bits, \texttt{RSA\_KEY\_SIZE\_BITS}$=3072$; $\sim$128 bits de seguridad) con
+\texttt{SecureRandom}; claves públicas X.509, privadas PKCS\#8. (El prefijo
+\texttt{RSA/ECB} en la transformación JCA es histórico: no hay encadenamiento ECB;
+OAEP cifra un único bloque.)
+\paragraph{OAEP (Bellare--Rogaway).} \emph{Optimal Asymmetric Encryption
+Padding}. Con $k_0=k_1=hLen=32$ (SHA-256), $k=384$ bytes de salida RSA-3072,
+$mLen \le k - 2k_0 - 2 = 318$; $\ell=\text{lHash}$; $PS$ ceros; $MGF1$-SHA256;
+\texttt{PSource.PSpecified.DEFAULT} ($P=\emptyset$); $G,H$ \emph{random oracles}.
+Red \emph{Feistel} de 2 rondas; semilla aleatoria de 32 bytes:
+\[
+  DB = \ell \,\|\, PS \,\|\, \mathtt{0x01} \,\|\, M,\quad
+  \text{maskedDB} = DB \oplus G(r),\quad
+  \text{maskedSeed} = r \oplus H(\text{maskedDB}),
+\]
+\[
+  EM = \mathtt{0x00} \,\|\, \text{maskedSeed} \,\|\, \text{maskedDB},\qquad
+  c = EM^{e} \bmod N.
+\]
+Validación estricta del relleno en descifrado; cualquier fallo $\Rightarrow$
+\texttt{GeneralSecurityException} (sin distinguir causas; anti-oráculo).
+OAEP alcanza \textbf{IND-CCA2} en el modelo de oráculo aleatorio frente a ataques
+de oráculo de relleno (\emph{Bleichenbacher}); PKCS\#1 v1.5 fue \textbf{descartado}.
+Digest OAEP y MGF1 ambos \textbf{SHA-256} (\texttt{OAEPParameterSpec("SHA-256","MGF1",MGF1ParameterSpec.SHA256,...)},
+\texttt{OAEPWithSHA-256AndMGF1Padding}); se fija el digest para que ningún
+proveedor caiga a SHA-1. Longitud encapsulada $=k=384$ bytes.
+\paragraph{KEM.} Un DEK aleatorio de 256 bits (\texttt{DEK\_LENGTH\_BYTES}$=32$;
+\texttt{AES}, \texttt{SecureRandom}) se envuelve bajo la clave pública KEM;
+\texttt{encapsulate}/\texttt{decapsulate}. Separar establecimiento de clave de
+cifrado de datos (\emph{key encapsulation}) permite \textbf{IND1} y cifrado
+híbrido. La jerarquía KEK/DEK separa la clave derivada de la contraseña de la
+clave que cifra los datos, habilitando la rotación barata (§\ref{sec:rot}).
+
+\subsection{IND2 --- Firmas digitales: Ed25519 RFC 8032 (\texttt{crypto.DigitalSigner})}
+\paragraph{Curva.} Curva de \textbf{Edwards torcida} sobre $\Fp$, $p = 2^{255}-19$:
+\[
+  -x^2 + y^2 = 1 + d\,x^2 y^2,\qquad d = -\tfrac{121665}{121666}.
+\]
+Orden del punto base $B$: $L = 2^{252} + 27742317777372353535851937790883648493$
+(primo); \emph{cofactor} 8; aritmética completa (sin excepciones) y constante en
+tiempo. Clave pública $A = [a]B$, 32 bytes; semilla privada 32 bytes; firma
+$(\Sigma_1=R,\Sigma_2=S)$, 64 bytes (\texttt{SIGNATURE\_LENGTH\_BYTES}$=64$;
+algoritmo JCA \texttt{Ed25519}).
+\paragraph{Firma determinista.} SHA-512 (no se necesita aleatoriedad por firma):
+\[
+  r = H(k' \,\|\, M) \bmod L,\qquad R = [r]B,\qquad
+  k = H(R \,\|\, A \,\|\, M) \bmod L,\qquad
+  S = (r + k\cdot a) \bmod L,
+\]
+con $a$ escalar secreto derivado de la semilla por hashing + \emph{clamping}.
+\textbf{Determinismo elimina la catastrófica reutilización de \emph{nonce} de
+ECDSA} (recuperación de clave privada). Verificación:
+\[
+  [S]B = R + [k]A \pmod{\text{curva}},\qquad S \in [0, L),
+\]
+firmas malformadas $\Rightarrow$ \texttt{false}; fallo de operación $\Rightarrow$
+\texttt{SecurityException}.
+\paragraph{Canonicalización y Verify-before-Decrypt.} Se firma JSON
+\emph{canónico}: Gson compacto (sin pretty print, \texttt{disableHtmlEscaping}),
+UTF-8, del \texttt{VaultPayload}. \texttt{PersistenciaBoveda.read} verifica la
+firma \textbf{antes} de cualquier descifrado; \texttt{decapsulateDek} y
+\texttt{decryptCredentials} \textbf{vuelven a verificar}. Firma ausente/vacía,
+clave ausente, \emph{payload} ausente o Base64 inválido $\Rightarrow$
+\texttt{SecurityException}. La clave de firma usada es \texttt{signingPublicKey}
+del propio \emph{payload} (ver limitación de sustitución de clave, §\ref{sec:lim}).
+El \emph{payload} canónico firmado es \texttt{usuario} + \texttt{encapsulatedDek}
++ \texttt{credentialsIv} + \texttt{credentialsCiphertext}.
+
+\subsection{IND3 --- Prueba de conocimiento cero: Schnorr RFC 3526 Grupo 14 (\texttt{crypto.SchnorrZKP})}
+\paragraph{Grupo.} $\Fp^*$ con \textbf{primo seguro} $p$ de 2048 bits (RFC~3526
+\emph{MODP Group 14}, hex de 512 dígitos en el código; \texttt{P}); subgrupo de
+orden primo
+\[
+  q = \tfrac{p-1}{2}\ \text{primo (\texttt{Q}, 2047 bits)},\qquad g = 2\ (\texttt{G}).
+\]
+$g$ genera el subgrupo de orden $q$. \textbf{Chequeo de subgrupo} en verificación:
+\[
+  z \in [1, p-1],\qquad z^{q} \equiv 1 \pmod p\quad\Rightarrow\quad z \in \langle g\rangle .
+\]
+\paragraph{Registro.} Contraseña maestra $\to$ Argon2id $\to$ Seed $\to$
+\[
+  x = \text{Seed} \bmod q,\quad x{=}1 \text{ si } x{=}0,\qquad
+  Y = g^{x} \bmod p\ (\texttt{computeVerifier}).
+\]
+Se almacena solo $Y$ (Base64, \texttt{usuario.verifier}); \textbf{no} se almacena
+hash de contraseña. (Código: \texttt{UsuarioMaestro} usa
+\texttt{SchnorrZKP.secretFromSeed} sobre la mitad alta; existe además
+\texttt{SchnorrZKP.deriveSecret} equivalente.)
+\paragraph{Protocolo $\Sigma$ interactivo de 3 movimientos.} Con $r \xleftarrow{\$} [1, q-1]$
+(\texttt{randomInRange}, rechazo; \texttt{SecureRandom}) y reto $c \xleftarrow{\$} [1, q-1]$
+(\texttt{generateChallenge}; verificación acepta $[0,q)$):
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+Paso & Mensaje \\
+\midrule
+1. Compromiso (Prover $\to$ Verifier) & $R = g^{r} \bmod p$ \\
+2. Reto (Verifier $\to$ Prover) & $c \in \Zq^*$ \\
+3. Respuesta (Prover $\to$ Verifier) & $s = (r + c\cdot x) \bmod q$ \\
+\midrule
+Verificación & $g^{s} \equiv R \cdot Y^{c} \pmod p$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+\texttt{ProverSession} es \emph{one-shot}: \texttt{respond} puede llamarse una vez
+(\texttt{IllegalStateException}); \textbf{nunca se reutiliza el nonce $r$}; rangos
+validados; comparación constante \texttt{MessageDigest.isEqual}. En
+\texttt{UsuarioMaestro.authenticate}/\texttt{unlock} el prover genera su propio
+reto (en despliegues con verificador remoto el reto debe ser del verificador);
+\texttt{unlock} solo descifra las claves privadas si la prueba verifica.
+\paragraph{Propiedades formales.}
+\begin{itemize}
+  \item \textbf{Completitud.} Si el prover conoce $x$, verifica:
+    $g^{s} = g^{r+cx} = g^{r}(g^{x})^{c} = R\,Y^{c} \pmod p$.\;\checkmark
+  \item \textbf{Solidez (Soundness).} Si $Y$ no es $g^{x}$ del prover, la
+    probabilidad de pasar es $\le 1/q$ (\emph{knowledge error} $1/q$; reto
+    uniforme independiente). Un \emph{extractor} obtiene $x$ de dos transcripciones
+    con mismo $R$ y retos $c \neq c'$:
+    \[
+      x = (s - s')\,(c - c')^{-1} \bmod q .
+    \]
+    Imposible forjar con contraseña incorrecta (\emph{impersonation rejected}).
+  \item \textbf{Conocimiento cero (HVZK).} Para verificador honesto existe un
+    \emph{simulador} que produce transcripciones indistinguibles sin conocer $x$:
+    elige $s \xleftarrow{\$} \Zq$, $c \xleftarrow{\$} \Zq$ y fija
+    $R = g^{s}Y^{-c} \bmod p$; la distribución coincide. Nada se filtra de $x$
+    ni de la contraseña; $Y$ es independiente del reto.
+\end{itemize}
+
+\section{Flujos operativos}
+
+\subsection{Registro}
+Generar salt 128 bits; Argon2id $\ell=64$; KEK + Seed; $x, Y$; generar par RSA-3072
+KEM y par Ed25519; cifrar ambas privadas con AES-256-GCM bajo KEK (nonces IV
+frescos, Base64); generar DEK 256 bits; envolver DEK con OAEP; construir
+\texttt{payload}; firmar Ed25519; escribir atómicamente.
+
+\subsection{Login}
+\texttt{PersistenciaBoveda.read}: leer UTF-8; validar estructura; \textbf{verificar
+firma antes de pedir contraseña}. Hasta 3 intentos (\texttt{MAX\_LOGIN\_ATTEMPTS}$=3$);
+contraseña no vacía; \texttt{Gestor.desbloquear}; ZKP; derivar KEK; descifrar
+RSA/Ed25519 (PKCS\#8); descapsular DEK; descifrar credenciales; \texttt{SecurityException}
+$\Rightarrow$ intento fallido; borrar contraseña; tras 3 fallos \texttt{SecurityException}.
+Entrada segura \texttt{System.console().readPassword()} con \emph{fallback}
+\texttt{Scanner} (nota: puede hacer eco sin consola).
+
+\subsection{Guardado / persistencia}
+Serializar credenciales UTF-8 (\texttt{char[]} como códigos numéricos UTF-16;
+Gson compacto); AES-256-GCM bajo DEK (nonce 96 bits fresco); re-envolver DEK con
+OAEP; firmar payload canónico Ed25519; escribir \textbf{temporal + rename atómico}
+(\texttt{Files.createTempFile} en el mismo directorio; \texttt{ATOMIC\_MOVE} +
+\texttt{REPLACE\_EXISTING}; fallback no atómico si no soportado; limpiar temporal).
+Archivo UTF-8. (El README menciona permisos propietario-único en POSIX; en el
+código inspeccionado no se fijan permisos explícitos vía
+\texttt{PosixFilePermission}; ver §\ref{sec:lim}.)
+Cada credencial añadida se guarda inmediatamente; opción 0 sale sin guardar.
+
+\subsection{Rotación de contraseña maestra}\label{sec:rot}
+Verificar contraseña actual con ZKP; \textbf{nuevo salt} 128 bits; Argon2id
+nueva contraseña $\ell=64$; nueva KEK + Seed; re-cifrar \textbf{las mismas} claves
+privadas RSA/Ed25519 bajo nueva KEK; recalcular $Y$; \textbf{re-envolver el mismo
+DEK} bajo la \emph{misma} clave pública KEM; re-firmar; \textbf{mantener
+\texttt{credentialsIv} y \texttt{credentialsCiphertext} byte a byte}
+(\texttt{PersistenciaBoveda.rewrap}); re-escribir atómicamente. La contraseña
+antigua deja de funcionar. Claves públicas inalteradas. El \emph{blob} de credenciales
+no se re-cifra (eficiencia y simplicidad; ver §\ref{sec:lim}).
+
+\subsection{Formato de la bóveda}
+JSON UTF-8 \texttt{boveda.json}; Base64. Ver README para ejemplo abreviado. Campos:
+\texttt{salt}, \texttt{verifier}, \texttt{kemPublicKey}, \texttt{kemPrivateKeyIv},
+\texttt{kemPrivateKeyCiphertext}, \texttt{signingPublicKey},
+\texttt{signingPrivateKeyIv}, \texttt{signingPrivateKeyCiphertext},
+\texttt{nombreDeUsuario}, \texttt{encapsulatedDek}, \texttt{credentialsIv},
+\texttt{credentialsCiphertext}, \texttt{signature}. Firma sobre JSON canónico del
+\emph{payload} (no incluye \texttt{signature}).
+
+\subsection{Higiene de memoria}
+Secretos como \texttt{char[]}/\texttt{byte[]}; \texttt{SecretWiper} puesta a cero;
+borrado tras derivar KEK/seed; conversión UTF-8 con limpieza; claves
+\texttt{SecretKey.destroy()}; \texttt{Gestor.lock()}; contraseña nunca \texttt{String}.
+\textbf{Best-effort}: JVM puede copiar arrays; \texttt{BigInteger} ($x, r, s, Y, p, q$)
+\textbf{no} se puede asegurar a cero; destrucción de clave privada depende del
+proveedor (§\ref{sec:lim}).
+
+\section{Alternativas criptográficas descartadas}
+\begin{longtable}{@{}p{4.8cm}p{5.6cm}p{3.8cm}@{}}
+\toprule
+Opción descartada & Problema & Elegida \\
+\midrule
+SHA-256 / SHA-256 con salt & Rápida, amigable GPU; bóveda robada $\Rightarrow$ adivinación masiva offline & Argon2id \\
+PBKDF2 / bcrypt / scrypt & Memory-hardness / side-channel más débiles; bcrypt trunca contraseñas largas & Argon2id \\
+AES-ECB & Determinista; filtra patrones; sin integridad & AES-256-GCM \\
+AES-CBC sin MAC & Maleable; oráculo de relleno & AES-256-GCM (AEAD) \\
+AES-GCM con nonce reutilizado & Recuperación de clave/tag catastrófica & Nonce aleatorio 96 bits fresco \\
+RSA PKCS\#1 v1.5 & Bleichenbacher / oráculo de relleno & RSA-OAEP-SHA256 \\
+ECDSA & Reutilización de nonce filtra clave; implementaciones frágiles & Ed25519 determinista \\
+Almacenar hash de contraseña & Objetivo offline equivalente a contraseña & Verificador Schnorr $Y$; sin hash \\
+JSON / Base64 en claro & Sin confidencialidad ni integridad & AES-GCM + Ed25519 \\
+\bottomrule
+\end{longtable}
+
+\section{Resultados de pruebas}\label{sec:tests}
+Evidencia real recogida ejecutando en este repositorio:
+\begin{lstlisting}
+mvn clean test
+...
+Tests run: 63, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+\end{lstlisting}
+\textbf{63 tests JUnit~5, 0 fallos, 0 errores} (paquetes \texttt{crypto},
+\texttt{model}, \texttt{storage}, \texttt{security}, \texttt{cli}, \texttt{util};
+clases auxiliares como \texttt{crypto.Argon2KDFTest}, \texttt{crypto.VaultCipherTest},
+\texttt{crypto.KeyEncapsulatorTest}, \texttt{crypto.DigitalSignerTest},
+\texttt{crypto.SchnorrZKPTest}, \texttt{model.CredentialTest},
+\texttt{model.UsuarioMaestroTest}, \texttt{model.GestorTest},
+\texttt{storage.PersistenciaBovedaTest}, \texttt{security.EndToEndLifecycleTest},
+\texttt{security.AbuseScenariosTest}, CLI, etc.).
+\begin{itemize}
+  \item \textbf{crypto}: vectores/parámetros Argon2id; AES-GCM ida y vuelta y
+        rechazo de manipulación/clave incorrecta; KEM RSA-OAEP; Ed25519;
+        Schnorr y rechazo de impersonación.
+  \item \textbf{modelo}: manejo de secretos \texttt{Credential};
+        registro/ZKP/unlock \texttt{UsuarioMaestro}; ciclo \texttt{Gestor};
+        puesta a cero DEK; rotación.
+  \item \textbf{storage}: ida y vuelta; firma manipulada aborta;
+        verify-before-decrypt; fallo AEAD con DEK incorrecto.
+  \item \textbf{security}: ciclo completo + abuso.
+  \item \textbf{cli}: sesiones guionizadas, reinicio, lockout, rotación por menú.
+\end{itemize}
+\paragraph{Pruebas negativas notables.}
+Voltear 1 byte de firma Ed25519 $\Rightarrow$ \texttt{SecurityException} antes de
+descifrar; voltear 1 byte de AES-GCM $\Rightarrow$ \texttt{AEADBadTagException};
+contraseña incorrecta $\Rightarrow$ prueba \texttt{false}; DEK con RSA ajeno
+$\Rightarrow$ \texttt{GeneralSecurityException}; sustitución de clave dentro del
+payload \emph{no} detectada sin pinning (§\ref{sec:lim}).
+
+\section{Microevidencias individuales (IND1 / IND2 / IND3)}\label{sec:micro}
+Programas independientes \texttt{evidencias.EvidenciaKEM}, \texttt{EvidenciaFirma},
+\texttt{EvidenciaZKP}; imprimen entradas, salidas y \texttt{PASS}/\texttt{FAIL};
+terminan \texttt{[RESULT] PASS}; salida \textbf{reproducible} (DEK/salt/contraseña
+fijos; vector RFC~8032; aleatoriedad no impresa). Ejecutados aquí:
+\begin{lstlisting}
+mvn exec:java -Dexec.mainClass=evidencias.EvidenciaKEM
+mvn exec:java -Dexec.mainClass=evidencias.EvidenciaFirma
+mvn exec:java -Dexec.mainClass=evidencias.EvidenciaZKP
+\end{lstlisting}
+
+\subsection*{IND1 --- KEM (salida real)}
+\begin{lstlisting}
+============================================================
+ IND1 - KEM (RSA-OAEP-SHA256)
+============================================================
+[INPUT]  DEK (32 bytes): 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+[INPUT]  DEK SHA-256:    630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd
+[OUTPUT] KEM key pair: RSA / 3072-bit modulus
+[OUTPUT] OAEP: SHA-256 digest, MGF1-SHA256
+[OUTPUT] Encapsulated DEK length: 384 bytes (OAEP randomness makes the bytes differ per run)
+[OUTPUT] Recovered DEK: 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+[VERIFY] Recovered DEK equals input DEK: PASS
+[VERIFY] Tampered encapsulation rejected: PASS
+[VERIFY] Unrelated private key rejected: PASS
+
+[RESULT] PASS
+\end{lstlisting}
+
+\subsection*{IND2 --- Ed25519 (salida real)}
+\begin{lstlisting}
+============================================================
+ IND2 - Digital Signature (Ed25519)
+============================================================
+[INPUT]  RFC 8032 TEST 1 seed (32 bytes): 9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60
+[OUTPUT] Derived public key (32 bytes): d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a
+[VERIFY] Derived public key matches RFC 8032: PASS
+[OUTPUT] RFC 8032 signature (empty message): e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b
+[VERIFY] Signature matches RFC 8032 vector: PASS
+[INPUT]  Message: boveda.json|usuario=alice|credenciales=2
+[OUTPUT] Signature (64 bytes): 4893009a53525f04ba9d48730a87948d1485cf2a19effbde6397012fb18fdeb6cae380c2553eca4bf466f0e0c8f736152de5219d179c625f3a9d57974572540e
+[OUTPUT] Signature SHA-256: 1555bec5454012269cf8b8775e69b7b7a211bb891487411f5513fea83eea2e20
+[VERIFY] Valid signature accepted: PASS
+[VERIFY] One-byte signature tampering rejected: PASS
+[VERIFY] Different message rejected: PASS
+
+[RESULT] PASS
+\end{lstlisting}
+
+\subsection*{IND3 --- Schnorr ZKP (salida real)}
+\begin{lstlisting}
+============================================================
+ IND3 - Schnorr Zero-Knowledge Proof (IND3)
+============================================================
+[INPUT]  Group: RFC 3526 Group 14 (p 2048 bits, q 2047 bits, g=2)
+[INPUT]  Password (fixed demo value): "demo-master-password"
+[INPUT]  Salt (16 bytes): 000102030405060708090a0b0c0d0e0f
+[OUTPUT] Secret x SHA-256:   dbb2b83a1afd8f8c1483a40769b764e92251e18b81c93a781965c847f5f09625
+[OUTPUT] Verifier Y SHA-256: e30c429a900b63a2ad1bc39f88f7fc7bb60a6622f377ffa6bf8aaaadaacc9c5a
+[VERIFY] Verifier is in the order-q subgroup: PASS
+[VERIFY] Registration is deterministic: PASS
+[OUTPUT] Commitment R, challenge c and response s generated (random nonce; values vary per run)
+[VERIFY] Valid proof accepted: PASS
+[VERIFY] Impersonation with wrong password rejected: PASS
+[VERIFY] Tampered response rejected: PASS
+
+[RESULT] PASS
+\end{lstlisting}
+
+\section{Limitaciones conocidas}\label{sec:lim}
+\begin{itemize}
+  \item \textbf{Sustitución de bóveda / clave.} La clave pública Ed25519 está
+        dentro del \emph{payload} firmado. Un atacante que reemplaza \emph{todo}
+        el archivo por otra bóveda autoconsistente no es detectado salvo
+        \emph{pinning} de clave o huella verificada fuera de banda (TOFU futuro).
+  \item \textbf{\emph{Rollback} y borrado.} Una bóveda antigua válida puede
+        restaurarse; el archivo puede borrarse (DoS). No hay contador monotónico.
+  \item \textbf{Fuga de metadatos.} Tamaño del archivo / longitud del
+        \emph{ciphertext} revela número y tamaño aproximados de credenciales.
+  \item \textbf{Borrado de memoria \emph{best-effort}.} La JVM puede copiar
+        arrays; \texttt{BigInteger} ($x,r,s$) no se puede asegurar a cero;
+        destrucción de claves depende del proveedor.
+  \item \textbf{Un usuario, local.} Sin acceso multiusuario, sincronización,
+        recuperación, auditoría, GUI ni integración de portapapeles.
+  \item \textbf{Rotación no re-cifra credenciales.} Se mantiene el mismo DEK y el
+        mismo \emph{blob}; un DEK expuesto seguiría descifrándolo (mitigado por la
+        integridad Ed25519 y por no rotar DEK; rotar DEK requeriría re-cifrar
+        todo y no está implementado).
+  \item \textbf{Permisos POSIX.} Se escribe atómicamente (temporal + rename) pero
+        el código inspeccionado no fija permisos propietario-único
+        explícitamente, pese a afirmarlo el README original; verificar
+        permisos del SO aparte.
+  \item \textbf{Autenticación local.} El reto del verificador en la
+        implementación actual es generado por el propio \emph{prover}
+        (\texttt{UsuarioMaestro.authenticate/unlock}); un despliegue con
+        verificador remoto debe emitir el reto de forma independiente para
+        sacar provecho completo de la solidez interactiva.
+  \item \textbf{No apto para producción.} Implementación docente/académica; no
+        auditada formalmente.
+\end{itemize}
+
+\section{Consideraciones legales y licencias}
+\begin{tabular}{@{}ll@{}}
+\toprule
+Componente & Licencia \\
+\midrule
+Bouncy Castle (\texttt{bcprov-jdk18on}) & Licencia tipo MIT \\
+Google Gson & Apache License 2.0 \\
+JUnit 5 (Jupiter) & Eclipse Public License 2.0 (EPL-2.0) \\
+Apache Maven & Apache License 2.0 \\
+\bottomrule
+\end{tabular}
+
+\bigskip
+\noindent
+Todas las dependencias utilizadas son de código abierto y compatibles con fines
+académicos y comerciales, respetando sus respectivos avisos de atribución y
+copyright. El uso de primitivas criptográficas estándar (AES-256, RSA-3072,
+Ed25519, Argon2id) tiene fines estrictamente educativos; en caso de distribución
+internacional de software con cifrado fuerte, deben considerarse las
+regulaciones locales de exportación e importación criptográfica aplicables.
+
+\end{document}
